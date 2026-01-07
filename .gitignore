@@ -1,0 +1,4 @@
+venv/
+__pycache__/
+.jax_cache/
+*.pyc
