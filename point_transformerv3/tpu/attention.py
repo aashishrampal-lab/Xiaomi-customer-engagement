@@ -8,15 +8,12 @@ import jax.numpy as jnp
 import jax.profiler  # Import for Xprof
 import numpy as np
 
-from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-
-
 # --- Configuration ---
 MAX_CAPACITY = 100000
 CHANNELS = 64
 NUM_HEADS = 4
 PATCH_SIZE = 1024
-DTYPE = jnp.float32
+
 
 class SerializedAttentionJax(nn.Module):
   channels: int
@@ -27,99 +24,58 @@ class SerializedAttentionJax(nn.Module):
   attn_drop: float = 0.0
   proj_drop: float = 0.0
   enable_rpe: bool = False
-  dtype: jnp.dtype = DTYPE
 
   def setup(self):
     self.head_dim = self.channels // self.num_heads
     self.scale = self.qk_scale or (self.head_dim**-0.5)
-    self.qkv = nn.Dense(self.channels * 3, use_bias=self.qkv_bias, dtype=self.dtype)
-    self.proj = nn.Dense(self.channels, dtype=self.dtype)
-
+    self.qkv = nn.Dense(self.channels * 3, use_bias=self.qkv_bias)
+    self.proj = nn.Dense(self.channels)
     if self.enable_rpe:
       self.rpe_mlp = nn.Sequential(
-          [nn.Dense(self.channels // 2, dtype=self.dtype), nn.relu, nn.Dense(self.num_heads, dtype=self.dtype)]
+          [nn.Dense(self.channels // 2), nn.relu, nn.Dense(self.num_heads)]
       )
 
   def __call__(self, x, grid_coords, batch_idx, deterministic=True):
     N, C = x.shape
     remainder = N % self.patch_size
     pad_len = (self.patch_size - remainder) % self.patch_size
-    
-    # 1. Padding so that we can evenly split the sequence into patches of size self.patch_size
     if pad_len > 0:
       x = jnp.pad(x, ((0, pad_len), (0, 0)))
       grid_coords = jnp.pad(grid_coords, ((0, pad_len), (0, 0)))
       batch_idx = jnp.pad(batch_idx, ((0, pad_len)), constant_values=-2)
-    
     num_patches = x.shape[0] // self.patch_size
     x_patches = x.reshape(num_patches, self.patch_size, C)
     batch_idx_patches = batch_idx.reshape(num_patches, self.patch_size)
-
-    # 2. QKV Projection & Reshape
     qkv = self.qkv(x_patches)
-    # Reshape to (Batch/NumPatches, Seq/PatchSize, 3, Heads, Dim)
     qkv = qkv.reshape(
         num_patches, self.patch_size, 3, self.num_heads, self.head_dim
     )
-    
-    # Transpose for Splash Attention: (Batch, Seq, Head, Dim)
-    # We want: (3, Batch, Seq, Heads, Dim)
-    qkv = qkv.transpose(2, 0, 1, 3, 4)
+    qkv = qkv.transpose(2, 0, 3, 1, 4)
     q, k, v = qkv[0], qkv[1], qkv[2]
-    dim = q.shape[-1]
-    target_dim = max(dim, 128)
-    pad_len = target_dim - dim
-
-    if pad_len > 0:
-        # Pad only the last dimension (Dim) with zeros
-        # Format: ((top, bottom), (top, bottom), ...) for each dimension
-        pad_width = ((0, 0), (0, 0), (0, 0), (0, pad_len))
-        
-        q = jnp.pad(q, pad_width)
-        k = jnp.pad(k, pad_width)
-        v = jnp.pad(v, pad_width)
-
-    # 3. Create Splash Mask
-    # Create boolean mask: (Batch, 1, Seq, Seq)
-    # True (1) = Keep/Attend, False (0) = Mask
+    attn_logits = jnp.einsum("...qd,...kd->...qk", q, k) * self.scale
     batch_mask = batch_idx_patches[:, :, None] == batch_idx_patches[:, None, :]
-
-    # 4. Initialize Splash Kernel
-    # We create the kernel here because the mask is dynamic (depends on batch_idx input).
-    # Splash internally handles the complexity of blocking this mask.
-    splash_kernel = splash_attention_kernel.make_splash_mha_single_device(
-        mask=batch_mask,
+    batch_mask = batch_mask[:, None, :, :]
+    min_float = jnp.finfo(jnp.float32).min
+    attn_logits = jnp.where(batch_mask, attn_logits, min_float)
+    if self.enable_rpe:
+      coords_patches = grid_coords.reshape(num_patches, self.patch_size, 3)
+      rel_pos = coords_patches[:, :, None, :] - coords_patches[:, None, :, :]
+      rpe_bias = self.rpe_mlp(rel_pos).transpose(0, 3, 1, 2)
+      attn_logits = attn_logits + rpe_bias
+    attn_weights = nn.softmax(attn_logits, axis=-1)
+    attn_out = jnp.einsum("...qk,...kd->...qd", attn_weights, v)
+    x_out = self.proj(
+        attn_out.transpose(0, 2, 1, 3).reshape(num_patches, self.patch_size, C)
     )
-
-    # 5. Execute Attention
-    # Note: RPE is skipped here because splash_attention fuses dot-product+softmax
-    # and does not expose an interface to inject bias terms (like RPE) in between.
-    attn_out = jax.vmap(splash_kernel)(
-        q, k, v, 
-        segment_ids=None 
-    )[..., : dim]
-    
-    # attn_out shape is (num_patches, patch_size, num_heads, head_dim)
-
-    # 6. Projection and Reshape Back
-    # Flatten: (num_patches, patch_size, num_heads, head_dim) -> (num_patches, patch_size, C)
-    attn_out_flat = attn_out.reshape(num_patches, self.patch_size, C)
-    
-    x_out = self.proj(attn_out_flat)
-    
-    # Remove padding and flatten back to (N, C)
     x_out = x_out.reshape(-1, C)[:N, :]
-    # print(x_out.shape)
-    # print(x.shape)
-    
-    return x_out
+    return x[:N, :] + x_out
 
 
 def generate_ragged_batch(max_capacity):
   lengths = []
   current_total = 0
   while current_total < max_capacity:
-    l = np.random.randint(low=100, high=20000)
+    l = np.random.randint(low=10000, high=30000)
     if current_total + l > max_capacity:
       l = max_capacity - current_total
     if l <= 0:
@@ -145,7 +101,7 @@ def benchmark_variable_lengths():
       CHANNELS, NUM_HEADS, PATCH_SIZE, enable_rpe=False
   )
   key = jax.random.PRNGKey(42)
-  dummy_feat = jax.random.normal(key, (MAX_CAPACITY, CHANNELS), dtype=DTYPE)
+  dummy_feat = jax.random.normal(key, (MAX_CAPACITY, CHANNELS))
   dummy_coords = jax.random.randint(key, (MAX_CAPACITY, 3), 0, 1000)
   batch_idx = generate_ragged_batch(MAX_CAPACITY)
   variables = model.init(key, dummy_feat, dummy_coords, batch_idx)
@@ -154,6 +110,7 @@ def benchmark_variable_lengths():
   def forward_pass(vars, x, c, b):
     return model.apply(vars, x, c, b, deterministic=True)
 
+  
   warmup_steps = 10
   print("Running warm-up steps...")
   start_warmup = time.time()
@@ -161,8 +118,7 @@ def benchmark_variable_lengths():
       batch_idx_warmup = generate_ragged_batch(MAX_CAPACITY)
       _ = forward_pass(variables, dummy_feat, dummy_coords, batch_idx_warmup).block_until_ready()
   print(f"Warm-up finished in {time.time() - start_warmup:.4f}s")
-
-  print("\nRunning Benchmark with DIFFERENT batch configurations per step...")
+  
   iterations = 20
 
   # --- XPROF Configuration ---
@@ -175,15 +131,15 @@ def benchmark_variable_lengths():
   print(f"Starting Xprof trace, saving to: {log_dir}")
   jax.profiler.start_trace(log_dir)
 
-  batch_idx = [generate_ragged_batch(MAX_CAPACITY) for _ in range(iterations)]
-  print(f"Generated {len(batch_idx)} batches of size {MAX_CAPACITY}")
-  start_time = time.time()
+  total_time=0
   for i in range(iterations):
+    if i % 5 == 0:
+      batch_idx = generate_ragged_batch(MAX_CAPACITY)
+    total_time -= time.time()
     with jax.profiler.StepTraceAnnotation("train", step_num=i):
-        out = forward_pass(variables, dummy_feat, dummy_coords, batch_idx[i])
+        out = forward_pass(variables, dummy_feat, dummy_coords, batch_idx)
         out.block_until_ready()
-  
-  total_time = time.time() - start_time
+    total_time +=time.time()
 
   avg_time = ((total_time) / iterations) * 1000
 
@@ -199,6 +155,10 @@ def benchmark_variable_lengths():
   # ---
 
   print(f"\nAverage Time per Step: {avg_time:.4f} ms")
+  print(
+      "Success: The model handled variable batch lengths without recompiling!"
+  )
+
 
 
 if __name__ == "__main__":

@@ -65,19 +65,18 @@ class SerializedAttentionJax(nn.Module):
     # Transpose for Splash Attention: (Batch, Seq, Head, Dim)
     # We want: (3, Batch, Seq, Heads, Dim)
     qkv = qkv.transpose(2, 0, 1, 3, 4)
-    q, k, v = qkv[0], qkv[1], qkv[2]
-    dim = q.shape[-1]
-    target_dim = max(dim, 128)
-    pad_len = target_dim - dim
+    # qkv shape: (3, num_patches, patch_size, num_heads, self.head_dim)
+
+    target_dim = max(self.head_dim, 128)
+    pad_len = target_dim - self.head_dim
 
     if pad_len > 0:
-        # Pad only the last dimension (Dim) with zeros
-        # Format: ((top, bottom), (top, bottom), ...) for each dimension
-        pad_width = ((0, 0), (0, 0), (0, 0), (0, pad_len))
-        
-        q = jnp.pad(q, pad_width)
-        k = jnp.pad(k, pad_width)
-        v = jnp.pad(v, pad_width)
+        # Pad the last dimension of the combined qkv tensor
+        pad_width = ((0, 0), (0, 0), (0, 0), (0, 0), (0, pad_len))
+        qkv = jnp.pad(qkv, pad_width)
+        # qkv shape: (3, num_patches, patch_size, num_heads, target_dim)
+
+    q, k, v = qkv[0], qkv[1], qkv[2]
 
     # 3. Create Splash Mask
     # Create boolean mask: (Batch, 1, Seq, Seq)
@@ -97,7 +96,7 @@ class SerializedAttentionJax(nn.Module):
     attn_out = jax.vmap(splash_kernel)(
         q, k, v, 
         segment_ids=None 
-    )[..., : dim]
+    )[..., : self.head_dim]
     
     # attn_out shape is (num_patches, patch_size, num_heads, head_dim)
 
