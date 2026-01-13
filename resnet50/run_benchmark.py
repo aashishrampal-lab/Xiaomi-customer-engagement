@@ -28,32 +28,8 @@ def load_imagenet_superbatch(batch_size, num_steps):
     # Convert to single numpy array
     real_images_np = next(iter(tfds.as_numpy(ds)))
     
-    # This reshape will now ALWAYS succeed
     return real_images_np.reshape((num_steps, batch_size, 224, 224, 3))
 
-#def load_imagenet_superbatch(batch_size, num_steps):
-    """Loads and preprocesses real images into a single HBM-ready tensor."""
-   # print(f"Loading {batch_size * num_steps} real images from Imagenette...")
-    
-    # We use 'imagenette' (a smaller version) for easy setup, 
-    # but you can swap this for 'imagenet2012' if you have the credentials.
-   # ds = tfds.load('imagenette/320px', split='validation', as_supervised=True)
-    
-   # def preprocess(image, label):
-       # image = tf.image.resize(image, (224, 224))
-      #  image = tf.cast(image, tf.float32) / 255.0
-        # ImageNet Mean/Std
-     #   image = (image - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
-    #    return image
-
-    # Batch them to the total count we need for the benchmark
-   # total_images = batch_size * num_steps
-   # ds = ds.map(preprocess).take(total_images).batch(total_images)
-    
-    # Convert to a single numpy array
-  #  real_images_np = next(iter(tfds.as_numpy(ds)))
-    
-    # Reshape to (steps, batch, 224, 224, 3)
 def run_real_data_benchmark(model_size=50, batch_size=1024, num_steps=10):
     # 1. Setup Mesh & Sharding
     devices = jax.devices()
@@ -100,5 +76,4 @@ def run_real_data_benchmark(model_size=50, batch_size=1024, num_steps=10):
 
 if __name__ == "__main__":
     tf.config.set_visible_devices([], 'TPU')
-    # Using 1024 to stay safe with memory since real images are loaded in full
     run_real_data_benchmark(batch_size=1024, num_steps=50)
