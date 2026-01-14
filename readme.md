@@ -7,7 +7,7 @@ This repository contains scripts and code for benchmarking ResNet50 and key comp
 The primary goal is to evaluate the feasibility and performance of Google TPUs (v6e) against GPUs (H100) for training and inference tasks relevant to ADAS, encompassing both standard Convolutional Neural Networks and models designed for sparse point cloud data.
 
 ## Repository Structure
-
+```
 .
 ├── point_transformerv3
 │ ├── gpu
@@ -26,7 +26,7 @@ The primary goal is to evaluate the feasibility and performance of Google TPUs (
     ├── run_benchmark.py
 
 
-
+```
 
 *   **`point_transformerv3`**: Contains benchmarks for specific kernels and operations within the Point Transformer v3 model.
     *   **`gpu`**: PyTorch implementations for GPU benchmarking.
