@@ -15,20 +15,16 @@ The primary goal is to evaluate the feasibility and performance of Google TPUs (
 │ │ ├── grid_pooling.py
 │ │ └── serialized_attention.py
 │ └── tpu
-│ ├── argsort.py
-│ ├── attention.py
-│ ├── block_size_tuning.py
-│ ├── serialized_pooling.py
-│ ├── splash_attention.py
-│ └── splash_attention_pad_fusion.py
+│   ├── argsort.py
+│   ├── attention.py
+│   ├── block_size_tuning.py
+│   ├── serialized_pooling.py
+│   ├── splash_attention.py
+│   └── splash_attention_pad_fusion.py
 └── resnet50
-├── jax_resnet
-├── tests
-├── LICENSE
-├── requirements-dev.txt
-├── run_benchmark.py
-├── setup.cfg
-└── setup.py
+    ├── jax_resnet.py
+    ├── run_benchmark.py
+
 
 
 
@@ -39,11 +35,11 @@ The primary goal is to evaluate the feasibility and performance of Google TPUs (
         *   `serialized_attention.py`: Benchmark for attention layers.
     *   **`tpu`**: JAX implementations for TPU benchmarking.
         *   `argsort.py`: ArgSort benchmark.
-        *   `attention.py`: Basic attention implementation.
-        *   `block_size_tuning.py`: Script for tuning block sizes in attention.
         *   `serialized_pooling.py`: Benchmark for pooling layers.
+        *   `attention.py`: Basic attention implementation.
         *   `splash_attention.py`: Optimized Splash Attention implementation.
         *   `splash_attention_pad_fusion.py`: Splash Attention with fused padding.
+        *   `block_size_tuning.py`: Script for tuning block sizes in attention.
 *   **`resnet50`**: Contains code for benchmarking the ResNet50 model.
     *   `jax_resnet`: JAX implementation of ResNet50 for TPU.
     *   `run_benchmark.py`: Script to execute ResNet50 benchmarks.
@@ -58,15 +54,4 @@ The primary goal is to evaluate the feasibility and performance of Google TPUs (
 
 ## Usage
 
-Each directory (`gpu`, `tpu` within `point_transformerv3`, and `resnet50`) contains specific scripts. To run the benchmarks, navigate to the respective directories and execute the Python scripts. Ensure you have the necessary environments (CUDA for GPU, TPU dependencies for JAX) and libraries installed (as per `requirements-dev.txt` for ResNet50).
-
-Example (conceptual):
-
-```bash
-# Example for running a TPU attention benchmark
-cd point_transformerv3/tpu
-python attention.py
-
-# Example for running ResNet50 benchmark
-cd resnet50
-python run_benchmark.py
+Each directory (`gpu`, `tpu` within `point_transformerv3`, and `resnet50`) contains specific scripts. To run the benchmarks, navigate to the respective directories and execute the Python scripts. Ensure you have the necessary environments (CUDA for GPU, TPU dependencies for JAX) and libraries installed (as per `requirementstxt`).
